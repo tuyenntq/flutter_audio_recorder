@@ -1,28 +1,36 @@
 package com.zeno.flutter_audio_recorder;
 
 import android.app.Activity;
+import android.os.Handler;
+import android.os.Looper;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.HashMap;
 
+import io.flutter.plugin.common.BinaryMessenger;
+import io.flutter.plugin.common.EventChannel;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 
-public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler {
+public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler, EventChannel.StreamHandler, AudioRecordingListener {
     private static final String TAG = "AndroidAudioRecorder";
     private final RequestPermissionHandler requestPermissionHandler;
 
     private RecordThread recordThread;
+    private EventChannel.EventSink eventSink;
+    private boolean listening = false;
+    private Handler mainHandler;
 
-    MethodCallHandlerImpl() {
+    MethodCallHandlerImpl(BinaryMessenger messenger) {
         this.requestPermissionHandler = new RequestPermissionHandler();
+        EventChannel eventChannel = new EventChannel(messenger, "flutter_audio_recorder.events");
+        eventChannel.setStreamHandler(this);
+        mainHandler = new Handler(Looper.getMainLooper());
     }
 
     public void setActivity(Activity activity) {
         requestPermissionHandler.setActivity(activity);
     }
-
 
     public void addPermissionResultListener(PermissionRegistry.AddPermissionResultListener permissionRegistry) {
         permissionRegistry.addListener(requestPermissionHandler);
@@ -30,6 +38,25 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler {
 
     public void removePermissionResultListener(PermissionRegistry.RemovePermissionResultListener permissionRegistry) {
         permissionRegistry.removeListener(requestPermissionHandler);
+    }
+
+    @Override
+    public void onListen(Object arguments, EventChannel.EventSink events) {
+        this.eventSink = events;
+        this.listening = true;
+    }
+
+    @Override
+    public void onCancel(Object arguments) {
+        this.listening = false;
+        mainHandler.removeCallbacksAndMessages(null);
+    }
+
+    @Override
+    public void onAudioData(double[] data) {
+        if (listening && eventSink != null) {
+            mainHandler.post(() -> eventSink.success(data));
+        }
     }
 
     @Override
@@ -75,6 +102,8 @@ public class MethodCallHandlerImpl implements MethodChannel.MethodCallHandler {
             recordThread = new AACRecordThread(sampleRate, filePath, extension);
         else
             recordThread = new WAVRecordThread(sampleRate, filePath, extension);
+
+        recordThread.setRecordingListener(this);
 
         HashMap<String, Object> initResult = new HashMap<>();
         initResult.put("duration", 0);

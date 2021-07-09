@@ -12,12 +12,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
 
 public class WAVRecordThread extends RecordThread {
     private static final String TAG = WAVRecordThread.class.getSimpleName();
     private static final byte RECORDER_BPP = 16; // we use 16bit
+    private static final int SAMPLE_BUFFER_SIZE = 6400;
 
     private AudioRecord recorder = null;
     private FileOutputStream fileOutputStream = null;
@@ -25,6 +27,8 @@ public class WAVRecordThread extends RecordThread {
     private double averagePower = -120;
     private Thread recordingThread = null;
     private long dataSize = 0;
+    private ShortBuffer sampleDataBuffer = ShortBuffer.allocate(SAMPLE_BUFFER_SIZE);
+    private int currentFilledDataSize = 0;
 
     WAVRecordThread(int sampleRate, String filePath, String extension) {
         super(sampleRate, filePath, extension);
@@ -97,6 +101,7 @@ public class WAVRecordThread extends RecordThread {
             recorder.read(bData, 0, bData.length);
             dataSize += bData.length;
             updatePowers(bData);
+            updateListener(bData);
             try {
                 fileOutputStream.write(bData);
             } catch (IOException e) {
@@ -218,6 +223,34 @@ public class WAVRecordThread extends RecordThread {
         peakPower = -120;
         averagePower = -120;
         dataSize = 0;
+        currentFilledDataSize = 0;
+    }
+
+    private void updateListener(byte[] bdata) {
+        if (recordingListener != null) {
+            short[] data = byte2short(bdata);
+            if (currentFilledDataSize == 0) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize = length;
+            } else if (currentFilledDataSize < SAMPLE_BUFFER_SIZE) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE - currentFilledDataSize);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize += length;
+            }
+
+            if (currentFilledDataSize == SAMPLE_BUFFER_SIZE && sampleDataBuffer.hasArray()) {
+                short[] sampleData = sampleDataBuffer.array();
+                double[] audioData = new double[sampleData.length];
+                for (int i = 0; i < sampleData.length; i++) {
+                    audioData[i] = sampleData[i] / 32767.0;
+                }
+                recordingListener.onAudioData(audioData);
+
+                currentFilledDataSize = 0;
+                sampleDataBuffer.clear();
+            }
+        }
     }
 
     private void updatePowers(byte[] bdata) {

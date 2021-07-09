@@ -7,8 +7,10 @@ import 'package:path/path.dart' as p;
 
 /// Audio Recorder Plugin
 class FlutterAudioRecorder {
-  static const MethodChannel _channel =
+  static const MethodChannel _methodChannel =
       const MethodChannel('flutter_audio_recorder');
+  static const EventChannel _eventChannel =
+      EventChannel('flutter_audio_recorder.events');
   static const String DEFAULT_EXTENSION = '.m4a';
   static LocalFileSystem fs = LocalFileSystem();
 
@@ -18,6 +20,8 @@ class FlutterAudioRecorder {
   String? _extension;
   Recording? _recording;
   int? _sampleRate;
+  Stream<List<double>?>? _sampleStream;
+  StreamSubscription? _sampleSubscription;
 
   Future<void> get initialized => _initRecorder.future;
   Recording? get recording => _recording;
@@ -65,7 +69,7 @@ class FlutterAudioRecorder {
     _sampleRate = sampleRate;
 
     late Map<String, Object> response;
-    var result = await _channel.invokeMethod('init',
+    var result = await _methodChannel.invokeMethod('init',
         {"path": _path, "extension": _extension, "sampleRate": _sampleRate});
 
     if (result != false) {
@@ -81,22 +85,37 @@ class FlutterAudioRecorder {
     return;
   }
 
+  void listenToSampleUpdate(
+      Function(List<double>?) onData, Function(dynamic) onError) {
+    if (_sampleStream == null) {
+      _sampleStream = _eventChannel
+          .receiveBroadcastStream()
+          .map((buffer) => buffer as List<dynamic>?)
+          .map((list) => list?.map((e) => double.parse('$e')).toList());
+    }
+    _sampleSubscription?.cancel();
+    _sampleSubscription = _sampleStream!.handleError((error) {
+      _sampleStream = null;
+      onError(error);
+    }).listen(onData);
+  }
+
   /// Request an initialized recording instance to be [started]
   /// Once executed, audio recording will start working and
   /// a file will be generated in user's file system
   Future<void> start() async {
-    return _channel.invokeMethod('start');
+    return _methodChannel.invokeMethod('start');
   }
 
   /// Request currently [Recording] recording to be [Paused]
   /// Note: Use [current] to get latest state of recording after [pause]
   Future<void> pause() async {
-    return _channel.invokeMethod('pause');
+    return _methodChannel.invokeMethod('pause');
   }
 
   /// Request currently [Paused] recording to continue
   Future<void> resume() async {
-    return _channel.invokeMethod('resume');
+    return _methodChannel.invokeMethod('resume');
   }
 
   /// Request the recording to stop
@@ -104,12 +123,14 @@ class FlutterAudioRecorder {
   /// and will not be start, resume, pause anymore.
   Future<Recording?> stop() async {
     Map<String, Object> response;
-    var result = await _channel.invokeMethod('stop');
+    var result = await _methodChannel.invokeMethod('stop');
 
     if (result != null) {
       response = Map.from(result);
       _responseToRecording(response);
     }
+
+    _sampleSubscription?.cancel();
 
     return _recording;
   }
@@ -120,7 +141,8 @@ class FlutterAudioRecorder {
   Future<Recording?> current({int channel = 0}) async {
     Map<String, Object> response;
 
-    var result = await _channel.invokeMethod('current', {"channel": channel});
+    var result =
+        await _methodChannel.invokeMethod('current', {"channel": channel});
 
     if (result != null && _recording?.status != RecordingStatus.Stopped) {
       response = Map.from(result);
@@ -134,7 +156,7 @@ class FlutterAudioRecorder {
   /// if not determined(app first launch),
   /// this will ask user to whether grant the permission
   static Future<bool?> get hasPermissions async {
-    bool? hasPermission = await _channel.invokeMethod('hasPermissions');
+    bool? hasPermission = await _methodChannel.invokeMethod('hasPermissions');
     return hasPermission;
   }
 
