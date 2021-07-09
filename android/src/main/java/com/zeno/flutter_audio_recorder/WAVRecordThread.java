@@ -222,18 +222,30 @@ public class WAVRecordThread extends RecordThread {
 
     private void updatePowers(byte[] bdata) {
         short[] data = byte2short(bdata);
-        short sampleVal = data[data.length - 1];
         String[] escapeStatusList = new String[]{"paused", "stopped", "initialized", "unset"};
 
-        if (sampleVal == 0 || Arrays.asList(escapeStatusList).contains(status)) {
+        double sum = 0;
+        double max = 0;
+        // Take the buffer content, perform a square sum operation
+        for (int i = 0; i < data.length; i++) {
+            double square = data[i] * data[i];
+            sum += square;
+            if (square > max) {
+                max = square;
+            }
+        }
+        // The sum of the squares divided by the total length of the data gives the volume.
+        double mean = sum / (double) data.length;
+
+        if (mean == 0 || Arrays.asList(escapeStatusList).contains(status)) {
             averagePower = -120; // to match iOS silent case
+            peakPower = -120;
         } else {
             // iOS factor : to match iOS power level
-            double iOSFactor = 0.25;
-            averagePower = 20 * Math.log(Math.abs(sampleVal) / 32768.0) * iOSFactor;
+            double iOSFactor = 0.3;
+            averagePower = 10 * Math.log(mean / (32767.0 * 32767.0)) * iOSFactor;
+            peakPower = 10 * Math.log(max / (32767.0 * 32767.0)) * iOSFactor;
         }
-
-        peakPower = averagePower;
         // Log.d(LOG_NAME, "Peak: " + mPeakPower + " average: "+ mAveragePower);
     }
 
