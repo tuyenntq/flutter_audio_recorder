@@ -13,6 +13,7 @@ public abstract class RecordThread implements Runnable{
     protected String extension;
     protected int bufferSize;
     protected String status;
+    protected AudioRecordingListener recordingListener;
 
     RecordThread(int sampleRate, String filePath, String extension) {
         this.sampleRate = sampleRate;
@@ -20,6 +21,10 @@ public abstract class RecordThread implements Runnable{
         this.extension = extension;
         this.bufferSize = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         this.status = "initialized";
+    }
+
+    public void setRecordingListener(AudioRecordingListener listener) {
+        this.recordingListener = listener;
     }
 
     public int getSampleRate() {

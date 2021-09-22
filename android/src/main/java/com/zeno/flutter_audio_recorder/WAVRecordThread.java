@@ -12,12 +12,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
 
 public class WAVRecordThread extends RecordThread {
     private static final String TAG = WAVRecordThread.class.getSimpleName();
     private static final byte RECORDER_BPP = 16; // we use 16bit
+    private static final int SAMPLE_BUFFER_SIZE = 6400;
 
     private AudioRecord recorder = null;
     private FileOutputStream fileOutputStream = null;
@@ -25,6 +27,8 @@ public class WAVRecordThread extends RecordThread {
     private double averagePower = -120;
     private Thread recordingThread = null;
     private long dataSize = 0;
+    private ShortBuffer sampleDataBuffer = ShortBuffer.allocate(SAMPLE_BUFFER_SIZE);
+    private int currentFilledDataSize = 0;
 
     WAVRecordThread(int sampleRate, String filePath, String extension) {
         super(sampleRate, filePath, extension);
@@ -97,6 +101,7 @@ public class WAVRecordThread extends RecordThread {
             recorder.read(bData, 0, bData.length);
             dataSize += bData.length;
             updatePowers(bData);
+            updateListener(bData);
             try {
                 fileOutputStream.write(bData);
             } catch (IOException e) {
@@ -218,22 +223,62 @@ public class WAVRecordThread extends RecordThread {
         peakPower = -120;
         averagePower = -120;
         dataSize = 0;
+        currentFilledDataSize = 0;
+    }
+
+    private void updateListener(byte[] bdata) {
+        if (recordingListener != null) {
+            short[] data = byte2short(bdata);
+            if (currentFilledDataSize == 0) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize = length;
+            } else if (currentFilledDataSize < SAMPLE_BUFFER_SIZE) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE - currentFilledDataSize);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize += length;
+            }
+
+            if (currentFilledDataSize == SAMPLE_BUFFER_SIZE && sampleDataBuffer.hasArray()) {
+                short[] sampleData = sampleDataBuffer.array();
+                double[] audioData = new double[sampleData.length];
+                for (int i = 0; i < sampleData.length; i++) {
+                    audioData[i] = sampleData[i] / 32767.0;
+                }
+                recordingListener.onAudioData(audioData);
+
+                currentFilledDataSize = 0;
+                sampleDataBuffer.clear();
+            }
+        }
     }
 
     private void updatePowers(byte[] bdata) {
         short[] data = byte2short(bdata);
-        short sampleVal = data[data.length - 1];
         String[] escapeStatusList = new String[]{"paused", "stopped", "initialized", "unset"};
 
-        if (sampleVal == 0 || Arrays.asList(escapeStatusList).contains(status)) {
+        double sum = 0;
+        double max = 0;
+        // Take the buffer content, perform a square sum operation
+        for (int i = 0; i < data.length; i++) {
+            double square = data[i] * data[i];
+            sum += square;
+            if (square > max) {
+                max = square;
+            }
+        }
+        // The sum of the squares divided by the total length of the data gives the volume.
+        double mean = sum / (double) data.length;
+
+        if (mean == 0 || Arrays.asList(escapeStatusList).contains(status)) {
             averagePower = -120; // to match iOS silent case
+            peakPower = -120;
         } else {
             // iOS factor : to match iOS power level
-            double iOSFactor = 0.25;
-            averagePower = 20 * Math.log(Math.abs(sampleVal) / 32768.0) * iOSFactor;
+            double iOSFactor = 0.3;
+            averagePower = 10 * Math.log(mean / (32767.0 * 32767.0)) * iOSFactor;
+            peakPower = 10 * Math.log(max / (32767.0 * 32767.0)) * iOSFactor;
         }
-
-        peakPower = averagePower;
         // Log.d(LOG_NAME, "Peak: " + mPeakPower + " average: "+ mAveragePower);
     }
 
