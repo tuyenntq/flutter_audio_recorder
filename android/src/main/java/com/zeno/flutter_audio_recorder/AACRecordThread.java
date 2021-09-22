@@ -13,13 +13,12 @@ import android.media.MediaRecorder;
 import android.os.Build;
 import android.util.Log;
 
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
 
@@ -30,6 +29,7 @@ public class AACRecordThread extends RecordThread {
     private static final int SAMPLE_RATE_INDEX = 4;
     private static final int CHANNELS = 1;
     private static final int BIT_RATE = 32000;
+    private static final int SAMPLE_BUFFER_SIZE = 6400;
 
     private MediaCodec mediaCodec = null;
     private AudioRecord audioRecord = null;
@@ -38,7 +38,8 @@ public class AACRecordThread extends RecordThread {
     private double averagePower = -120;
     private Thread recordingThread = null;
     private long dataSize = 0;
-
+    private ShortBuffer sampleDataBuffer = ShortBuffer.allocate(SAMPLE_BUFFER_SIZE);
+    private int currentFilledDataSize = 0;
 
     AACRecordThread(int sampleRate, String filePath, String extension) {
         super(sampleRate, filePath, extension);
@@ -48,6 +49,8 @@ public class AACRecordThread extends RecordThread {
 
     @Override
     public void start() throws IOException {
+        Log.d(TAG, "bufferSize: " + this.bufferSize);
+
         this.audioRecord = createAudioRecord(this.bufferSize);
         this.mediaCodec = createMediaCodec(this.bufferSize);
 
@@ -164,6 +167,7 @@ public class AACRecordThread extends RecordThread {
         peakPower = -120;
         averagePower = -120;
         dataSize = 0;
+        currentFilledDataSize = 0;
     }
 
     private boolean handleCodecInput(AudioRecord audioRecord,
@@ -173,6 +177,7 @@ public class AACRecordThread extends RecordThread {
         int length = audioRecord.read(audioRecordData, 0, audioRecordData.length);
         dataSize += audioRecordData.length;
         updatePowers(audioRecordData);
+        updateListener(audioRecordData);
 
         if (length == AudioRecord.ERROR_BAD_VALUE ||
                 length == AudioRecord.ERROR_INVALID_OPERATION ||
@@ -232,21 +237,59 @@ public class AACRecordThread extends RecordThread {
         }
     }
 
+    private void updateListener(byte[] bdata) {
+        if (recordingListener != null) {
+            short[] data = byte2short(bdata);
+            if (currentFilledDataSize == 0) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize = length;
+            } else if (currentFilledDataSize < SAMPLE_BUFFER_SIZE) {
+                int length = Math.min(data.length, SAMPLE_BUFFER_SIZE - currentFilledDataSize);
+                sampleDataBuffer.put(data, 0, length);
+                currentFilledDataSize += length;
+            }
+
+            if (currentFilledDataSize == SAMPLE_BUFFER_SIZE && sampleDataBuffer.hasArray()) {
+                short[] sampleData = sampleDataBuffer.array();
+                double[] audioData = new double[sampleData.length];
+                for (int i = 0; i < sampleData.length; i++) {
+                    audioData[i] = sampleData[i] / 32767.0;
+                }
+                recordingListener.onAudioData(audioData);
+
+                currentFilledDataSize = 0;
+                sampleDataBuffer.clear();
+            }
+        }
+    }
 
     private void updatePowers(byte[] bdata) {
         short[] data = byte2short(bdata);
-        short sampleVal = data[data.length - 1];
         String[] escapeStatusList = new String[]{"paused", "stopped", "initialized", "unset"};
 
-        if (sampleVal == 0 || Arrays.asList(escapeStatusList).contains(status)) {
+        double sum = 0;
+        double max = 0;
+        // Take the buffer content, perform a square sum operation
+        for (int i = 0; i < data.length; i++) {
+            double square = data[i] * data[i];
+            sum += square;
+            if (square > max) {
+                max = square;
+            }
+        }
+        // The sum of the squares divided by the total length of the data gives the volume.
+        double mean = sum / (double) data.length;
+
+        if (mean == 0 || Arrays.asList(escapeStatusList).contains(status)) {
             averagePower = -120; // to match iOS silent case
+            peakPower = -120;
         } else {
             // iOS factor : to match iOS power level
-            double iOSFactor = 0.25;
-            averagePower = 20 * Math.log(Math.abs(sampleVal) / 32768.0) * iOSFactor;
+            double iOSFactor = 0.3;
+            averagePower = 10 * Math.log(mean / (32767.0 * 32767.0)) * iOSFactor;
+            peakPower = 10 * Math.log(max / (32767.0 * 32767.0)) * iOSFactor;
         }
-
-        peakPower = averagePower;
         // Log.d(LOG_NAME, "Peak: " + mPeakPower + " average: "+ mAveragePower);
     }
 

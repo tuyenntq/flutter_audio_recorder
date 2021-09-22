@@ -64,7 +64,7 @@ public class FlutterAudioRecorderPlugin implements FlutterPlugin, ActivityAware 
 
     private void initialize(Context applicationContext, BinaryMessenger messenger) {
         methodChannel = new MethodChannel(messenger, "flutter_audio_recorder");
-        methodCallHandler = new MethodCallHandlerImpl();
+        methodCallHandler = new MethodCallHandlerImpl(messenger);
         methodChannel.setMethodCallHandler(methodCallHandler);
     }
 
